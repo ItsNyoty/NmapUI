@@ -1,0 +1,28 @@
+version: '3.8'
+
+services:
+  backend:
+    build: ./backend
+    ports:
+      - "3001:3001"
+    environment:
+      - NODE_ENV=production
+      - CORS_ORIGIN=http://frontend:3000  
+    networks:
+      - app-network
+
+  frontend:
+    build: ./frontend
+    ports:
+      - "3000:80"  
+    depends_on:
+      - backend
+    environment:
+      - NODE_ENV=production
+      - REACT_APP_API_URL=http://backend:3001  
+    networks:
+      - app-network
+
+networks:
+  app-network:
+    driver: bridge
