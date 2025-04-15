@@ -2,12 +2,12 @@ import express, { Request, Response } from "express";
 import { exec } from "child_process";
 import cors from "cors";
 import { promisify } from "util";
+import axios from "axios"; // To fetch geolocation
 
 const app = express();
 const port = 3001;
 const execAsync = promisify(exec);
 
-// Define types
 type PortInfo = {
   port: number;
   protocol: string;
@@ -20,15 +20,21 @@ type NmapResult = {
   scanTime: string;
 };
 
-// Middleware
+type Geolocation = {
+  country: string;
+  region: string;
+  city: string;
+  latitude: number;
+  longitude: number;
+};
+
 app.use(
   cors({
-    origin: "http://localhost:3000", // Update this if you are using a different frontend port
+    origin: "http://localhost:3000",
   })
 );
-app.use(express.json()); // Middleware to handle JSON request bodies
+app.use(express.json());
 
-// Validate the target IP/domain
 function isValidTarget(target: string): boolean {
   const ipRegex = /^(\d{1,3}\.){3}\d{1,3}$/;
   const domainRegex =
@@ -36,7 +42,6 @@ function isValidTarget(target: string): boolean {
   return ipRegex.test(target) || domainRegex.test(target);
 }
 
-// Parse the Nmap output into a structured format
 function parseNmapOutput(output: string): NmapResult {
   const ports: PortInfo[] = [];
   let scanTime = "";
@@ -59,20 +64,42 @@ function parseNmapOutput(output: string): NmapResult {
   return { ports, scanTime };
 }
 
-// Scan endpoint
-app.post("/scan", async (req: Request, res: Response) => {
-  const { target } = req.body;
+async function getGeolocation(target: string): Promise<Geolocation | null> {
+  try {
+    const response = await axios.get(`https://ipinfo.io/${target}/json`);
+    const { country, region, city, loc } = response.data;
+    const [latitude, longitude] = loc ? loc.split(",") : ["0", "0"];
+    return {
+      country,
+      region,
+      city,
+      latitude: parseFloat(latitude),
+      longitude: parseFloat(longitude),
+    };
+  } catch (error) {
+    console.error("Error fetching geolocation:", error);
+    return null;
+  }
+}
 
-  // Check if the target is valid
+app.post("/scan", async (req: Request, res: Response) => {
+  const { target, scanType } = req.body;
+
   if (!target || !isValidTarget(target)) {
     return res.status(400).json({ error: "Invalid target" });
   }
 
   try {
-    console.log(`Starting scan for target: ${target}`);
+    console.log(
+      `Starting scan for target: ${target} (type: ${scanType || "quick"})`
+    );
 
-    // Execute the nmap scan command
-    const { stdout, stderr } = await execAsync(`nmap -T4 -F ${target}`);
+    let nmapCommand = `nmap -T4 -F ${target}`; // Default to quick scan
+    if (scanType === "full") {
+      nmapCommand = `nmap -T4 -p- ${target}`; // Full port range
+    }
+
+    const { stdout, stderr } = await execAsync(nmapCommand);
 
     if (stderr) {
       console.error(`Error with Nmap execution: ${stderr}`);
@@ -80,17 +107,17 @@ app.post("/scan", async (req: Request, res: Response) => {
     }
 
     const result = parseNmapOutput(stdout);
+    const geolocation = await getGeolocation(target);
 
-    // Log the result for debugging
     console.log("Scan completed successfully. Ports found:", result.ports);
 
     res.json({
       target,
       ports: result.ports,
       scanTime: result.scanTime || "unknown",
+      geolocation: geolocation || "Geolocation not available",
     });
   } catch (error) {
-    // Detailed error handling
     console.error("Scan error:", error);
     res.status(500).json({
       error: "Scan failed",

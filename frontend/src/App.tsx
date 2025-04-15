@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useRef, useEffect } from "react";
 import { Button } from "./components/ui/button";
 import { Input } from "./components/ui/input";
 import { Label } from "./components/ui/label";
@@ -18,7 +18,13 @@ import {
   Zap,
   Server,
   Network,
+  Clock,
+  History,
+  FileDown,
+  Trash2,
 } from "lucide-react";
+
+const html2pdf = require("html2pdf.js");
 
 type PortResult = {
   port: number;
@@ -26,17 +32,41 @@ type PortResult = {
   state: "open" | "closed" | "filtered";
 };
 
+type Geolocation = {
+  country: string;
+  region: string;
+  city: string;
+  latitude: number;
+  longitude: number;
+};
+
 type ScanResult = {
   target: string;
   ports: PortResult[];
   scanTime: string;
+  geolocation: Geolocation | string;
 };
 
 export default function NmapScanner() {
   const [target, setTarget] = useState("");
+  const [scanType, setScanType] = useState("quick"); // Scan type state (quick/full)
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState("");
   const [result, setResult] = useState<ScanResult | null>(null);
+  const [history, setHistory] = useState<ScanResult[]>([]);
+
+  const resultRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const stored = localStorage.getItem("scanHistory");
+    if (stored) {
+      setHistory(JSON.parse(stored));
+    }
+  }, []);
+
+  useEffect(() => {
+    localStorage.setItem("scanHistory", JSON.stringify(history));
+  }, [history]);
 
   const handleScan = async () => {
     if (!target.trim()) {
@@ -52,7 +82,7 @@ export default function NmapScanner() {
       const response = await fetch("http://localhost:3001/scan", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ target: target.trim() }),
+        body: JSON.stringify({ target: target.trim(), scanType }), // Include scan type
       });
 
       if (!response.ok) {
@@ -61,7 +91,7 @@ export default function NmapScanner() {
       }
 
       const data = await response.json();
-      setResult({
+      const formatted: ScanResult = {
         target: data.target,
         ports: data.ports.map((p: any) => ({
           port: p.port,
@@ -69,7 +99,11 @@ export default function NmapScanner() {
           state: p.state,
         })),
         scanTime: data.scanTime,
-      });
+        geolocation: data.geolocation,
+      };
+
+      setResult(formatted);
+      setHistory((prev) => [formatted, ...prev]);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Scan failed");
     } finally {
@@ -118,18 +152,26 @@ export default function NmapScanner() {
                     className="bg-indigo-600 hover:bg-indigo-700 text-white font-medium shadow-lg transition-all duration-200 transform hover:scale-105"
                   >
                     {isLoading ? (
-                      <>
-                        <Loader2 className="mr-2 h-5 w-5 animate-spin" />
-                        Scanning
-                      </>
+                      <Loader2 className="mr-2 h-5 w-5 animate-spin" />
                     ) : (
-                      <>
-                        <Scan className="mr-2 h-5 w-5" />
-                        Start Scan
-                      </>
+                      <Scan className="mr-2 h-5 w-5" />
                     )}
+                    {isLoading ? "Scanning" : "Start Scan"}
                   </Button>
                 </div>
+
+                <div className="mt-2">
+                  <select
+                    value={scanType}
+                    onChange={(e) => setScanType(e.target.value)}
+                    className="bg-gray-700 text-white border-gray-600 p-2 rounded-lg w-full"
+                    disabled={isLoading}
+                  >
+                    <option value="quick">Quick Scan</option>
+                    <option value="full">Full Scan</option>
+                  </select>
+                </div>
+
                 {error && (
                   <div className="mt-2 p-2 bg-red-900/30 text-red-300 rounded flex items-center">
                     <X className="h-4 w-4 mr-2" />
@@ -139,7 +181,7 @@ export default function NmapScanner() {
               </div>
 
               {result && (
-                <div className="space-y-4">
+                <div className="space-y-4" ref={resultRef}>
                   <div className="bg-gray-700/50 p-4 rounded-lg">
                     <div className="flex items-center justify-between">
                       <div>
@@ -155,11 +197,34 @@ export default function NmapScanner() {
                         </p>
                       </div>
                       <div className="bg-gray-600/50 px-3 py-1 rounded-full text-xs text-gray-300 flex items-center">
-                        <Loader2 className="h-3 w-3 mr-1 animate-spin" />{" "}
-                        {result.scanTime}
+                        <Clock className="h-3 w-3 mr-1" /> {result.scanTime}
                       </div>
                     </div>
                   </div>
+
+                  {result.geolocation &&
+                    typeof result.geolocation === "object" && (
+                      <div className="bg-gray-700/50 p-4 rounded-lg">
+                        <h4 className="text-md font-semibold text-white">
+                          Geolocation
+                        </h4>
+                        <p className="text-sm text-gray-400">
+                          Country: {result.geolocation.country}
+                        </p>
+                        <p className="text-sm text-gray-400">
+                          Region: {result.geolocation.region}
+                        </p>
+                        <p className="text-sm text-gray-400">
+                          City: {result.geolocation.city}
+                        </p>
+                        <p className="text-sm text-gray-400">
+                          Latitude: {result.geolocation.latitude}
+                        </p>
+                        <p className="text-sm text-gray-400">
+                          Longitude: {result.geolocation.longitude}
+                        </p>
+                      </div>
+                    )}
 
                   <div className="overflow-hidden rounded-lg border border-gray-700 shadow-lg">
                     <table className="min-w-full divide-y divide-gray-700">
@@ -167,8 +232,7 @@ export default function NmapScanner() {
                         <tr>
                           <th className="px-6 py-3 text-left text-xs font-medium text-gray-300 uppercase tracking-wider">
                             <div className="flex items-center">
-                              <Network className="h-4 w-4 mr-2" />
-                              Port
+                              <Network className="h-4 w-4 mr-2" /> Port
                             </div>
                           </th>
                           <th className="px-6 py-3 text-left text-xs font-medium text-gray-300 uppercase tracking-wider">
@@ -194,21 +258,17 @@ export default function NmapScanner() {
                                 </div>
                               </div>
                             </td>
-                            <td className="px-6 py-4 whitespace-nowrap">
-                              <div className="text-sm text-gray-200 font-medium">
-                                {port.service}
-                              </div>
+                            <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-200 font-medium">
+                              {port.service}
                             </td>
                             <td className="px-6 py-4 whitespace-nowrap">
                               {port.state === "open" ? (
                                 <span className="inline-flex items-center px-3 py-1 rounded-full text-xs font-medium bg-green-900/30 text-green-300">
-                                  <Check className="h-3 w-3 mr-1" />
-                                  Open
+                                  <Check className="h-3 w-3 mr-1" /> Open
                                 </span>
                               ) : port.state === "closed" ? (
                                 <span className="inline-flex items-center px-3 py-1 rounded-full text-xs font-medium bg-red-900/30 text-red-300">
-                                  <X className="h-3 w-3 mr-1" />
-                                  Closed
+                                  <X className="h-3 w-3 mr-1" /> Closed
                                 </span>
                               ) : (
                                 <span className="inline-flex items-center px-3 py-1 rounded-full text-xs font-medium bg-yellow-900/30 text-yellow-300">
@@ -223,16 +283,51 @@ export default function NmapScanner() {
                   </div>
                 </div>
               )}
+
+              {history.length > 0 && (
+                <div className="bg-gray-700/40 p-4 rounded-lg mt-6">
+                  <div className="flex items-center justify-between mb-2">
+                    <h3 className="text-white text-lg font-semibold flex items-center">
+                      <History className="h-5 w-5 mr-2" /> Scan History
+                    </h3>
+                    <Button
+                      variant="destructive"
+                      size="sm"
+                      className="text-xs px-3 py-1"
+                      onClick={() => {
+                        setHistory([]);
+                        localStorage.removeItem("scanHistory");
+                      }}
+                    >
+                      <Trash2 className="h-4 w-4 mr-1" /> Clear
+                    </Button>
+                  </div>
+                  <ul className="space-y-2">
+                    {history.map((scan, index) => (
+                      <li
+                        key={index}
+                        className="flex justify-between items-center bg-gray-800 rounded-md p-2 hover:bg-gray-700"
+                      >
+                        <div>
+                          <span className="font-medium text-white">
+                            {scan.target}
+                          </span>
+                          <p className="text-xs text-gray-400">
+                            {scan.scanTime}
+                          </p>
+                        </div>
+                        <div>
+                          <span className="text-sm text-indigo-400">
+                            {scan.ports.length} ports
+                          </span>
+                        </div>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
             </div>
           </CardContent>
-
-          <CardFooter className="flex justify-between items-center text-xs text-gray-500 border-t border-gray-700">
-            <div className="flex items-center">
-              <Zap className="h-4 w-4 mr-2 text-indigo-400" />
-              <span>Nmap scanner made by ItsNyoty</span>
-            </div>
-            <div className="text-gray-400">v1.0.0</div>
-          </CardFooter>
         </Card>
       </div>
     </div>
